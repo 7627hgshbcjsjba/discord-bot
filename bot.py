@@ -35,8 +35,8 @@ STATUS_NAMES = {
 }
 
 # Rate limit protection
-LAST_RENAME = {}        # tracks last rename time
-LAST_STATUS = {}        # tracks last known status (prevents duplicate renames)
+LAST_RENAME = {}
+LAST_STATUS = {}
 
 
 @bot.check
@@ -105,15 +105,12 @@ async def _update_status_channel(member):
     status_key = str(member.status)
     new_name = STATUS_NAMES.get(status_key, STATUS_NAMES["offline"])
 
-    # Skip if channel is already named this
     if channel.name == new_name:
         return
 
-    # Skip if we already renamed to this status (prevents flicker)
     if LAST_STATUS.get(channel.id) == status_key:
         return
 
-    # Cooldown: 120 seconds (2 minutes) between renames
     now = time.time()
     last = LAST_RENAME.get(channel.id, 0)
     if now - last < 120:
@@ -198,6 +195,8 @@ async def modhelp(ctx):
 !unsecure
 !mediaenable
 !mediadisable
+!givechannelaccess @user
+!ungivechannelaccess @user
 !readhistoryall
 !readhistoryhere
 !slowmode seconds/off
@@ -243,6 +242,7 @@ async def commands(ctx):
         "!mute !unmute !kick !ban !unban !purge "
         "!lock !unlock !quicklock !quickunlock !private !public "
         "!secure !unsecure !mediaenable !mediadisable "
+        "!givechannelaccess !ungivechannelaccess "
         "!readhistoryall !readhistoryhere !slowmode "
         "!role add !role remove !role list "
         "!say !pingeveryone "
@@ -601,6 +601,126 @@ async def mediadisable(ctx):
     embed.add_field(name="Updated Role", value=role.mention, inline=True)
     embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
     await ctx.send(embed=embed)
+
+
+# ============== NEW COMMANDS ==============
+@bot.command()
+async def givechannelaccess(ctx, member: discord.Member):
+    """Give a member access to send messages, files, and embeds in the current channel."""
+    guild = ctx.guild
+    channel = ctx.channel
+    target = member
+
+    bot_perms = channel.permissions_for(guild.me)
+    if not bot_perms.manage_channels:
+        await ctx.send("❌ I don't have permission to edit this channel's permissions. "
+                       "Make sure my role has **Manage Channels** enabled.")
+        return
+
+    if target.top_role >= guild.me.top_role:
+        await ctx.send(f"❌ I can't edit permissions for {target.mention} — their role is higher than or equal to mine.")
+        return
+
+    try:
+        overwrite = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+            embed_links=True,
+            add_reactions=True,
+            connect=True,
+            speak=True,
+        )
+        await channel.set_permissions(target, overwrite=overwrite)
+
+        embed = discord.Embed(
+            title="✅ Channel Access Granted",
+            description=(
+                f"{target.mention} now has access to {channel.mention}.\n\n"
+                f"They can:\n"
+                f"• ✅ View the channel\n"
+                f"• ✅ Send messages\n"
+                f"• ✅ Send files and photos\n"
+                f"• ✅ Post embeds\n"
+                f"• ✅ Add reactions\n"
+                f"• ✅ Read message history"
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Granted By", value=ctx.author.mention, inline=True)
+        embed.add_field(name="User ID", value=str(target.id), inline=True)
+        embed.set_thumbnail(url=target.display_avatar.url)
+        await ctx.send(embed=embed)
+
+    except discord.Forbidden:
+        await ctx.send(f"❌ I don't have permission to edit permissions for {target.mention}.")
+    except discord.HTTPException as e:
+        await ctx.send(f"❌ Failed to set permissions: {e}")
+
+
+@bot.command()
+async def ungivechannelaccess(ctx, member: discord.Member):
+    """Remove a member's custom access permissions from the current channel."""
+    guild = ctx.guild
+    channel = ctx.channel
+    target = member
+
+    bot_perms = channel.permissions_for(guild.me)
+    if not bot_perms.manage_channels:
+        await ctx.send("❌ I don't have permission to edit this channel's permissions. "
+                       "Make sure my role has **Manage Channels** enabled.")
+        return
+
+    if target.top_role >= guild.me.top_role:
+        await ctx.send(f"❌ I can't edit permissions for {target.mention} — their role is higher than or equal to mine.")
+        return
+
+    current_overwrite = channel.overwrites_for(target)
+    if current_overwrite.is_empty():
+        await ctx.send(f"⚠️ {target.mention} doesn't have any custom permissions in {channel.mention}.")
+        return
+
+    try:
+        await channel.set_permissions(target, overwrite=None)
+
+        embed = discord.Embed(
+            title="🚫 Channel Access Removed",
+            description=(
+                f"{target.mention} no longer has custom access to {channel.mention}.\n\n"
+                f"• ❌ Custom permission overrides have been cleared\n"
+                f"• Their access now follows their **role permissions**"
+            ),
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Removed By", value=ctx.author.mention, inline=True)
+        embed.add_field(name="User ID", value=str(target.id), inline=True)
+        embed.set_thumbnail(url=target.display_avatar.url)
+        await ctx.send(embed=embed)
+
+    except discord.Forbidden:
+        await ctx.send(f"❌ I don't have permission to edit permissions for {target.mention}.")
+    except discord.HTTPException as e:
+        await ctx.send(f"❌ Failed to remove permissions: {e}")
+
+
+@givechannelaccess.error
+async def givechannelaccess_error(ctx, error):
+    if isinstance(error, MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!givechannelaccess @user`")
+    else:
+        print(f"Ignored exception in command givechannelaccess: {error}")
+
+
+@ungivechannelaccess.error
+async def ungivechannelaccess_error(ctx, error):
+    if isinstance(error, MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!ungivechannelaccess @user`")
+    else:
+        print(f"Ignored exception in command ungivechannelaccess: {error}")
+# ==========================================
 
 
 @bot.command()
