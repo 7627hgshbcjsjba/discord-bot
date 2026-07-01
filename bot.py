@@ -35,7 +35,8 @@ STATUS_NAMES = {
 }
 
 # Rate limit protection
-LAST_RENAME = {}
+LAST_RENAME = {}        # tracks last rename time
+LAST_STATUS = {}        # tracks last known status (prevents duplicate renames)
 
 
 @bot.check
@@ -104,16 +105,22 @@ async def _update_status_channel(member):
     status_key = str(member.status)
     new_name = STATUS_NAMES.get(status_key, STATUS_NAMES["offline"])
 
+    # Skip if channel is already named this
     if channel.name == new_name:
         return
 
-    # Rate limit protection: only rename once every 60 seconds
+    # Skip if we already renamed to this status (prevents flicker)
+    if LAST_STATUS.get(channel.id) == status_key:
+        return
+
+    # Cooldown: 120 seconds (2 minutes) between renames
     now = time.time()
     last = LAST_RENAME.get(channel.id, 0)
-    if now - last < 60:
+    if now - last < 120:
         return
 
     LAST_RENAME[channel.id] = now
+    LAST_STATUS[channel.id] = status_key
 
     try:
         await channel.edit(name=new_name, reason=f"Status changed to {status_key}")
