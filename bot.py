@@ -8,6 +8,8 @@ from discord.ext.commands import (
     MissingRequiredArgument,
     BadArgument,
 )
+import os
+import json
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,6 +20,26 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 TARGET_ROLE_ID = 1521658712626823290  # The "Member" role
 
 
+# ============== PERSISTENT WARNS ==============
+WARNS_FILE = "warns.json"
+
+def load_warns():
+    if os.path.exists(WARNS_FILE):
+        try:
+            with open(WARNS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_warns():
+    with open(WARNS_FILE, "w") as f:
+        json.dump(warn_storage, f, indent=2)
+
+warn_storage = load_warns()
+# ==============================================
+
+
 @bot.check
 async def is_admin_or_owner(ctx):
     if ctx.author.id == ctx.guild.owner_id:
@@ -25,9 +47,6 @@ async def is_admin_or_owner(ctx):
     if ctx.author.guild_permissions.administrator:
         return True
     return False
-
-
-warn_storage = {}
 
 
 @bot.event
@@ -243,6 +262,7 @@ async def warn(ctx, member: discord.Member, *, reason="No reason provided"):
         warn_storage[user_id] = []
 
     warn_storage[user_id].append(reason)
+    save_warns()  # <-- SAVES TO FILE
 
     embed = discord.Embed(
         title="⚠️ Member Warned",
@@ -318,6 +338,7 @@ async def clearwarns(ctx, member: discord.Member):
     user_id = str(member.id)
 
     warn_storage[user_id] = []
+    save_warns()  # <-- SAVES TO FILE
 
     embed = discord.Embed(
         title="🧹 Warnings Cleared",
@@ -1185,12 +1206,10 @@ async def on_command_error(ctx, error):
         print(f"Ignored exception in command {ctx.command}: {error}")
 
 
-import os
-
+# ============== TOKEN (FROM RAILWAY VARIABLE) ==============
 TOKEN = os.getenv("DISCORD_TOKEN")
 if TOKEN is None:
-    print("❌ ERROR: DISCORD_TOKEN not set!")
+    print("❌ ERROR: DISCORD_TOKEN not set! Add it in Railway Variables.")
     exit(1)
 
 bot.run(TOKEN)
-
