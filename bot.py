@@ -15,17 +15,17 @@ import time
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-intents.presences = True  # Required for status tracking
+intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-TARGET_ROLE_ID = 1521658712626823290  # The "Member" role
+TARGET_ROLE_ID = 1521658712626823290
 
 # --------------------
 # STATUS TRACKER CONFIG
 # --------------------
-STATUS_USER_ID = 1498086936781262899  # Your user ID
-STATUS_CHANNEL_ID = 1521693219652370532  # The channel to rename
+STATUS_USER_ID = 1498086936781262899
+STATUS_CHANNEL_ID = 1521693219652370532
 
 STATUS_NAMES = {
     "online": "🟢▫️online▫️𝖕𝖚𝖑𝖑𝖊",
@@ -34,18 +34,8 @@ STATUS_NAMES = {
     "offline": "🔴▫️offline▫️𝖕𝖚𝖑𝖑𝖊",
 }
 
-# Rate limit protection
 LAST_RENAME = {}
 LAST_STATUS = {}
-
-
-@bot.check
-async def is_admin_or_owner(ctx):
-    if ctx.author.id == ctx.guild.owner_id:
-        return True
-    if ctx.author.guild_permissions.administrator:
-        return True
-    return False
 
 
 # ============== PERSISTENT WARNS ==============
@@ -68,6 +58,37 @@ warn_storage = load_warns()
 # ==============================================
 
 
+# ============== PERSISTENT BOT ACCESS ==============
+BOT_ACCESS_FILE = "bot_access.json"
+
+def load_bot_access():
+    if os.path.exists(BOT_ACCESS_FILE):
+        try:
+            with open(BOT_ACCESS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_bot_access():
+    with open(BOT_ACCESS_FILE, "w") as f:
+        json.dump(bot_allowed_users, f, indent=2)
+
+bot_allowed_users = load_bot_access()
+# ====================================================
+
+
+@bot.check
+async def is_admin_or_owner(ctx):
+    if ctx.author.id == ctx.guild.owner_id:
+        return True
+    if ctx.author.guild_permissions.administrator:
+        return True
+    if str(ctx.author.id) in bot_allowed_users:
+        return True
+    return False
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
@@ -76,7 +97,6 @@ async def on_ready():
 
 @bot.event
 async def on_presence_update(before, after):
-    """Fires when a member's presence (status) changes."""
     if after.id != STATUS_USER_ID:
         return
     if before.status == after.status:
@@ -86,7 +106,6 @@ async def on_presence_update(before, after):
 
 @bot.event
 async def on_member_update(before, after):
-    """Fires when a member's status changes (e.g., invisible -> online)."""
     if after.id != STATUS_USER_ID:
         return
     if before.status == after.status:
@@ -95,10 +114,8 @@ async def on_member_update(before, after):
 
 
 async def _update_status_channel(member):
-    """Rename the status channel based on the member's current status."""
     guild = member.guild
     channel = guild.get_channel(STATUS_CHANNEL_ID)
-
     if channel is None:
         return
 
@@ -107,7 +124,6 @@ async def _update_status_channel(member):
 
     if channel.name == new_name:
         return
-
     if LAST_STATUS.get(channel.id) == status_key:
         return
 
@@ -129,17 +145,13 @@ async def _update_status_channel(member):
 
 
 async def _set_initial_status():
-    """Set the status channel name when the bot starts up."""
     if not bot.guilds:
         return
-
     guild = bot.guilds[0]
     member = guild.get_member(STATUS_USER_ID)
-
     if member is None:
         print(f"⚠️ Could not find user with ID {STATUS_USER_ID}")
         return
-
     await _update_status_channel(member)
 
 
@@ -222,6 +234,15 @@ async def modhelp(ctx):
         inline=False,
     )
     embed.add_field(
+        name="Bot Access",
+        value="""
+!givebotaccess @user
+!ungivebotaccess @user
+!botaccesslist
+""",
+        inline=False,
+    )
+    embed.add_field(
         name="Info",
         value="""
 !ping
@@ -243,6 +264,7 @@ async def commands(ctx):
         "!lock !unlock !quicklock !quickunlock !private !public "
         "!secure !unsecure !mediaenable !mediadisable "
         "!givechannelaccess !ungivechannelaccess "
+        "!givebotaccess !ungivebotaccess !botaccesslist "
         "!readhistoryall !readhistoryhere !slowmode "
         "!role add !role remove !role list "
         "!say !pingeveryone "
@@ -603,7 +625,6 @@ async def mediadisable(ctx):
     await ctx.send(embed=embed)
 
 
-# ============== NEW COMMANDS ==============
 @bot.command()
 async def givechannelaccess(ctx, member: discord.Member):
     """Give a member access to send messages, files, and embeds in the current channel."""
@@ -720,7 +741,106 @@ async def ungivechannelaccess_error(ctx, error):
         await ctx.send("❌ Usage: `!ungivechannelaccess @user`")
     else:
         print(f"Ignored exception in command ungivechannelaccess: {error}")
-# ==========================================
+
+
+# ============== BOT ACCESS COMMANDS ==============
+@bot.command()
+async def givebotaccess(ctx, member: discord.Member):
+    """Allow a member to use bot commands even without admin permissions."""
+    target_id = str(member.id)
+
+    if target_id in bot_allowed_users:
+        await ctx.send(f"⚠️ {member.mention} already has bot access.")
+        return
+
+    bot_allowed_users.append(target_id)
+    save_bot_access()
+
+    embed = discord.Embed(
+        title="✅ Bot Access Granted",
+        description=(
+            f"{member.mention} can now use all bot commands.\n\n"
+            f"They have the same access as an admin for bot commands."
+        ),
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Granted By", value=ctx.author.mention, inline=True)
+    embed.add_field(name="User ID", value=target_id, inline=True)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def ungivebotaccess(ctx, member: discord.Member):
+    """Remove a member's ability to use bot commands."""
+    target_id = str(member.id)
+
+    if member.id == ctx.guild.owner_id or member.guild_permissions.administrator:
+        await ctx.send(f"❌ Cannot remove bot access from {member.mention} — they are an admin or server owner.")
+        return
+
+    if target_id not in bot_allowed_users:
+        await ctx.send(f"⚠️ {member.mention} doesn't have custom bot access.")
+        return
+
+    bot_allowed_users.remove(target_id)
+    save_bot_access()
+
+    embed = discord.Embed(
+        title="🚫 Bot Access Removed",
+        description=(
+            f"{member.mention} can no longer use bot commands.\n\n"
+            f"• ❌ Custom bot access has been removed\n"
+            f"• They can only use commands if they are an admin or server owner"
+        ),
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Removed By", value=ctx.author.mention, inline=True)
+    embed.add_field(name="User ID", value=target_id, inline=True)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def botaccesslist(ctx):
+    """Show all members with custom bot access."""
+    if not bot_allowed_users:
+        await ctx.send("✅ No members currently have custom bot access.")
+        return
+
+    lines = []
+    for i, user_id in enumerate(bot_allowed_users, start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.mention if member else f"`<{user_id}>` (not in server)"
+        lines.append(f"**{i}.** {name}")
+
+    embed = discord.Embed(
+        title="🎟️ Members With Bot Access",
+        description="\n".join(lines),
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text=f"Total: {len(bot_allowed_users)} member(s)")
+    await ctx.send(embed=embed)
+
+
+@givebotaccess.error
+async def givebotaccess_error(ctx, error):
+    if isinstance(error, MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!givebotaccess @user`")
+    else:
+        print(f"Ignored exception in command givebotaccess: {error}")
+
+
+@ungivebotaccess.error
+async def ungivebotaccess_error(ctx, error):
+    if isinstance(error, MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!ungivebotaccess @user`")
+    else:
+        print(f"Ignored exception in command ungivebotaccess: {error}")
+# ==================================================
 
 
 @bot.command()
