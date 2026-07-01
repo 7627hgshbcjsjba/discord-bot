@@ -11,6 +11,7 @@ from discord.ext.commands import (
 import os
 import json
 import time
+import io
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -243,6 +244,17 @@ async def modhelp(ctx):
         inline=False,
     )
     embed.add_field(
+        name="Backup",
+        value="""
+!exportwarns
+!importwarns
+!exportaccess
+!importaccess
+!fullbackup
+""",
+        inline=False,
+    )
+    embed.add_field(
         name="Info",
         value="""
 !ping
@@ -265,6 +277,7 @@ async def commands(ctx):
         "!secure !unsecure !mediaenable !mediadisable "
         "!givechannelaccess !ungivechannelaccess "
         "!givebotaccess !ungivebotaccess !botaccesslist "
+        "!exportwarns !importwarns !exportaccess !importaccess !fullbackup "
         "!readhistoryall !readhistoryhere !slowmode "
         "!role add !role remove !role list "
         "!say !pingeveryone "
@@ -390,6 +403,193 @@ async def clearwarns(ctx, member: discord.Member):
     embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
     embed.set_footer(text=f"User ID: {member.id}")
     await ctx.send(embed=embed)
+
+
+# ============== BACKUP COMMANDS ==============
+@bot.command()
+async def exportwarns(ctx):
+    """Export all warns as a JSON file you can download."""
+    if not warn_storage:
+        await ctx.send("✅ No warns to export.")
+        return
+
+    data = json.dumps(warn_storage, indent=2)
+    file = discord.File(io.BytesIO(data.encode()), filename=f"warns_backup_{int(time.time())}.json")
+
+    embed = discord.Embed(
+        title="📥 Warns Backup",
+        description=(
+            f"Here's your warns backup file.\n\n"
+            f"• **Total users with warns:** {len(warn_storage)}\n"
+            f"• **Total warnings:** {sum(len(v) for v in warn_storage.values())}\n\n"
+            f"💡 Save this file! Use `!importwarns` (attach the file) to restore warns on a new bot instance."
+        ),
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    await ctx.send(embed=embed, file=file)
+
+
+@bot.command()
+async def importwarns(ctx):
+    """Import warns from a JSON file. Attach the file to your message."""
+    if not ctx.message.attachments:
+        await ctx.send("❌ Please attach a JSON file to import!\n\n**Usage:** Attach the backup file and type `!importwarns`")
+        return
+
+    attachment = ctx.message.attachments[0]
+
+    if not attachment.filename.endswith(".json"):
+        await ctx.send("❌ File must be a `.json` file!")
+        return
+
+    try:
+        data = json.loads(await attachment.read())
+
+        if not isinstance(data, dict):
+            await ctx.send("❌ Invalid file format! Expected a JSON object.")
+            return
+
+        # Merge with existing warns (add to existing, don't overwrite)
+        imported_count = 0
+        for user_id, reasons in data.items():
+            if user_id not in warn_storage:
+                warn_storage[user_id] = []
+            if isinstance(reasons, list):
+                for reason in reasons:
+                    if reason not in warn_storage[user_id]:
+                        warn_storage[user_id].append(reason)
+                        imported_count += 1
+
+        save_warns()
+
+        embed = discord.Embed(
+            title="✅ Warns Imported",
+            description=(
+                f"Successfully imported warns!\n\n"
+                f"• **Users affected:** {len(data)}\n"
+                f"• **New warnings added:** {imported_count}\n"
+                f"• **Total warns now:** {sum(len(v) for v in warn_storage.values())}"
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Imported by {ctx.author.display_name}")
+        await ctx.send(embed=embed)
+
+    except json.JSONDecodeError:
+        await ctx.send("❌ Invalid JSON file! Make sure it's a valid backup.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to import: {e}")
+
+
+@bot.command()
+async def exportaccess(ctx):
+    """Export bot access list as a JSON file."""
+    if not bot_allowed_users:
+        await ctx.send("✅ No bot access entries to export.")
+        return
+
+    data = json.dumps(bot_allowed_users, indent=2)
+    file = discord.File(io.BytesIO(data.encode()), filename=f"bot_access_backup_{int(time.time())}.json")
+
+    embed = discord.Embed(
+        title="📥 Bot Access Backup",
+        description=(
+            f"Here's your bot access backup.\n\n"
+            f"• **Total users with access:** {len(bot_allowed_users)}\n\n"
+            f"💡 Save this file! Use `!importaccess` (attach the file) to restore on a new bot instance."
+        ),
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    await ctx.send(embed=embed, file=file)
+
+
+@bot.command()
+async def importaccess(ctx):
+    """Import bot access list from a JSON file. Attach the file to your message."""
+    if not ctx.message.attachments:
+        await ctx.send("❌ Please attach a JSON file to import!\n\n**Usage:** Attach the backup file and type `!importaccess`")
+        return
+
+    attachment = ctx.message.attachments[0]
+
+    if not attachment.filename.endswith(".json"):
+        await ctx.send("❌ File must be a `.json` file!")
+        return
+
+    try:
+        data = json.loads(await attachment.read())
+
+        if not isinstance(data, list):
+            await ctx.send("❌ Invalid file format! Expected a JSON list of user IDs.")
+            return
+
+        added = 0
+        for user_id in data:
+            user_id = str(user_id)
+            if user_id not in bot_allowed_users:
+                bot_allowed_users.append(user_id)
+                added += 1
+
+        save_bot_access()
+
+        embed = discord.Embed(
+            title="✅ Bot Access Imported",
+            description=(
+                f"Successfully imported bot access!\n\n"
+                f"• **New users added:** {added}\n"
+                f"• **Total users with access:** {len(bot_allowed_users)}"
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Imported by {ctx.author.display_name}")
+        await ctx.send(embed=embed)
+
+    except json.JSONDecodeError:
+        await ctx.send("❌ Invalid JSON file! Make sure it's a valid backup.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to import: {e}")
+
+
+@bot.command()
+async def fullbackup(ctx):
+    """Download both warns and bot access in one file."""
+    backup_data = {
+        "warns": warn_storage,
+        "bot_access": bot_allowed_users,
+        "backup_date": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    data = json.dumps(backup_data, indent=2)
+    file = discord.File(io.BytesIO(data.encode()), filename=f"full_backup_{int(time.time())}.json")
+
+    embed = discord.Embed(
+        title="📦 Full Backup",
+        description=(
+            f"Here's a complete backup of all bot data.\n\n"
+            f"• **Users with warns:** {len(warn_storage)}\n"
+            f"• **Total warnings:** {sum(len(v) for v in warn_storage.values())}\n"
+            f"• **Users with bot access:** {len(bot_allowed_users)}\n\n"
+            f"💡 Use `!importwarns` and `!importaccess` separately to restore."
+        ),
+        color=discord.Color.purple(),
+        timestamp=discord.utils.utcnow()
+    )
+    await ctx.send(embed=embed, file=file)
+
+
+@importwarns.error
+async def importwarns_error(ctx, error):
+    print(f"Ignored exception in command importwarns: {error}")
+
+
+@importaccess.error
+async def importaccess_error(ctx, error):
+    print(f"Ignored exception in command importaccess: {error}")
+# ==========================================
 
 
 @bot.command()
@@ -743,7 +943,6 @@ async def ungivechannelaccess_error(ctx, error):
         print(f"Ignored exception in command ungivechannelaccess: {error}")
 
 
-# ============== BOT ACCESS COMMANDS ==============
 @bot.command()
 async def givebotaccess(ctx, member: discord.Member):
     """Allow a member to use bot commands even without admin permissions."""
@@ -840,7 +1039,6 @@ async def ungivebotaccess_error(ctx, error):
         await ctx.send("❌ Usage: `!ungivebotaccess @user`")
     else:
         print(f"Ignored exception in command ungivebotaccess: {error}")
-# ==================================================
 
 
 @bot.command()
