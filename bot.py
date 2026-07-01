@@ -1185,5 +1185,12 @@ async def on_command_error(ctx, error):
         print(f"Ignored exception in command {ctx.command}: {error}")
 
 
-TOKEN = "MTUyMTY2MTc2OTQxNDg2OTAyMg.GiKfni.R5Q7WKpot2_u3WPEjatqXdhWDsyzVjvXzDbYjo"
+import os
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+if TOKEN is None:
+    print("❌ ERROR: DISCORD_TOKEN not set!")
+    exit(1)
+
 bot.run(TOKEN)
+
