@@ -14,10 +14,33 @@ import json
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.presences = True  # Required for status tracking
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_ROLE_ID = 1521658712626823290  # The "Member" role
+
+# --------------------
+# STATUS TRACKER CONFIG
+# --------------------
+STATUS_USER_ID = 1498086936781262899  # Your user ID
+STATUS_CHANNEL_ID = 1521693219652370532  # The channel to rename
+
+STATUS_NAMES = {
+    "online": "🟢▫️online▫️𝖕𝖚𝖑𝖑𝖊",
+    "idle": "🟡▫️idle▫️𝖕𝖚𝖑𝖑𝖊",
+    "dnd": "🔴▫️dnd▫️𝖕𝖚𝖑𝖑𝖊",
+    "offline": "🔴▫️offline▫️𝖕𝖚𝖑𝖑𝖊",
+}
+
+
+@bot.check
+async def is_admin_or_owner(ctx):
+    if ctx.author.id == ctx.guild.owner_id:
+        return True
+    if ctx.author.guild_permissions.administrator:
+        return True
+    return False
 
 
 # ============== PERSISTENT WARNS ==============
@@ -40,18 +63,74 @@ warn_storage = load_warns()
 # ==============================================
 
 
-@bot.check
-async def is_admin_or_owner(ctx):
-    if ctx.author.id == ctx.guild.owner_id:
-        return True
-    if ctx.author.guild_permissions.administrator:
-        return True
-    return False
-
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+
+    # Set the status channel name on startup based on current status
+    await _set_initial_status()
+
+
+@bot.event
+async def on_presence_update(before, after):
+    """Fires when a member's presence (status) changes."""
+    if after.id != STATUS_USER_ID:
+        return
+
+    if before.status == after.status:
+        return
+
+    await _update_status_channel(after)
+
+
+@bot.event
+async def on_member_update(before, after):
+    """Fires when a member's status changes (e.g., invisible -> online)."""
+    if after.id != STATUS_USER_ID:
+        return
+
+    if before.status == after.status:
+        return
+
+    await _update_status_channel(after)
+
+
+async def _update_status_channel(member):
+    """Rename the status channel based on the member's current status."""
+    guild = member.guild
+    channel = guild.get_channel(STATUS_CHANNEL_ID)
+
+    if channel is None:
+        return
+
+    status_key = str(member.status)
+    new_name = STATUS_NAMES.get(status_key, STATUS_NAMES["offline"])
+
+    if channel.name == new_name:
+        return
+
+    try:
+        await channel.edit(name=new_name, reason=f"Status changed to {status_key}")
+        print(f"✅ Status channel renamed to: {new_name}")
+    except discord.Forbidden:
+        print(f"❌ I don't have permission to edit channel {channel.name}")
+    except discord.HTTPException as e:
+        print(f"❌ Failed to rename channel: {e}")
+
+
+async def _set_initial_status():
+    """Set the status channel name when the bot starts up."""
+    if not bot.guilds:
+        return
+
+    guild = bot.guilds[0]
+    member = guild.get_member(STATUS_USER_ID)
+
+    if member is None:
+        print(f"⚠️ Could not find user with ID {STATUS_USER_ID}")
+        return
+
+    await _update_status_channel(member)
 
 
 @bot.event
@@ -233,7 +312,7 @@ async def rules(ctx):
     if ctx.guild.icon:
         embed.set_thumbnail(url=ctx.guild.icon.url)
 
-    await ctx.send(embed=embed)
+    await ctx.send(embed=rules) if False else await ctx.send(embed=embed)
 
 
 @bot.command()
