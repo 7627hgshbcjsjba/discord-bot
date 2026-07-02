@@ -79,8 +79,42 @@ bot_allowed_users = load_bot_access()
 # ====================================================
 
 
+# ============== PERSISTENT AFK ==============
+AFK_FILE = "afk.json"
+
+def load_afk():
+    if os.path.exists(AFK_FILE):
+        try:
+            with open(AFK_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_afk():
+    with open(AFK_FILE, "w") as f:
+        json.dump(afk_storage, f, indent=2)
+
+afk_storage = load_afk()
+# ==========================================
+
+
+def _format_duration(seconds: int) -> str:
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 @bot.check
 async def is_admin_or_owner(ctx):
+    # Allow AFK commands for everyone
+    if ctx.command and ctx.command.name in ("afk", "unafk"):
+        return True
     if ctx.author.id == ctx.guild.owner_id:
         return True
     if ctx.author.guild_permissions.administrator:
@@ -171,6 +205,97 @@ async def on_member_join(member):
             pass
 
 
+@bot.event
+async def on_message(message):
+    # Don't react to bots (including ourselves)
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+
+    user_id = str(message.author.id)
+
+    # 1) If an AFK user sends a message, auto-remove their AFK status
+    if user_id in afk_storage:
+        data = afk_storage[user_id]
+        duration = time.time() - data.get("since", time.time())
+        del afk_storage[user_id]
+        save_afk()
+        try:
+            embed = discord.Embed(
+                title="👋 Welcome Back!",
+                description=f"{message.author.mention} is no longer AFK.",
+                color=discord.Color.green(),
+            )
+            embed.add_field(name="AFK Duration", value=_format_duration(duration), inline=True)
+            embed.add_field(name="Original Reason", value=data.get("reason", "No reason provided"), inline=True)
+            await message.channel.send(embed=embed, delete_after=6)
+        except discord.Forbidden:
+            pass
+
+    # Track who we already notified this message (so we don't double-notify on mention+reply)
+    notified_ids = set()
+
+    # 2) Notify when someone MENTIONS an AFK user
+    for mentioned in message.mentions:
+        mentioned_id = str(mentioned.id)
+        if mentioned.id == message.author.id:
+            continue  # don't notify someone about themselves
+        if mentioned.id in notified_ids:
+            continue
+        if mentioned_id not in afk_storage:
+            continue
+
+        notified_ids.add(mentioned.id)
+        data = afk_storage[mentioned_id]
+        duration = time.time() - data.get("since", time.time())
+
+        try:
+            embed = discord.Embed(
+                title="💤 User is AFK",
+                description=f"{mentioned.mention} is currently AFK and will reply when they return.",
+                color=discord.Color.greyple(),
+            )
+            embed.add_field(name="Reason", value=data.get("reason", "No reason provided"), inline=False)
+            embed.add_field(name="AFK For", value=_format_duration(duration), inline=True)
+            embed.set_thumbnail(url=mentioned.display_avatar.url)
+            embed.set_footer(text=f"Requested by {message.author.display_name}")
+            await message.channel.send(embed=embed, delete_after=12)
+        except discord.Forbidden:
+            pass
+
+    # 3) Notify when someone REPLIES to an AFK user's message
+    if message.reference is not None:
+        ref = message.reference.resolved
+        if isinstance(ref, discord.Message):
+            ref_author = ref.author
+            if ref_author.bot:
+                pass
+            elif ref_author.id == message.author.id:
+                pass
+            elif ref_author.id not in notified_ids:
+                ref_author_id = str(ref_author.id)
+                if ref_author_id in afk_storage:
+                    notified_ids.add(ref_author.id)
+                    data = afk_storage[ref_author_id]
+                    duration = time.time() - data.get("since", time.time())
+                    try:
+                        embed = discord.Embed(
+                            title="💤 User is AFK",
+                            description=f"{ref_author.mention} is currently AFK and will reply when they return.",
+                            color=discord.Color.greyple(),
+                        )
+                        embed.add_field(name="Reason", value=data.get("reason", "No reason provided"), inline=False)
+                        embed.add_field(name="AFK For", value=_format_duration(duration), inline=True)
+                        embed.set_thumbnail(url=ref_author.display_avatar.url)
+                        embed.set_footer(text=f"Requested by {message.author.display_name}")
+                        await message.channel.send(embed=embed, delete_after=12)
+                    except discord.Forbidden:
+                        pass
+
+    # Always let commands run too
+    await bot.process_commands(message)
+
+
 @bot.command()
 async def modhelp(ctx):
     embed = discord.Embed(
@@ -235,6 +360,14 @@ async def modhelp(ctx):
         inline=False,
     )
     embed.add_field(
+        name="AFK",
+        value="""
+!afk [reason]
+!unafk
+""",
+        inline=False,
+    )
+    embed.add_field(
         name="Bot Access",
         value="""
 !givebotaccess @user
@@ -281,6 +414,7 @@ async def commands(ctx):
         "!readhistoryall !readhistoryhere !slowmode "
         "!role add !role remove !role list "
         "!say !pingeveryone "
+        "!afk !unafk "
         "!ping !rules !rule !commands !modhelp"
     )
 
@@ -1276,6 +1410,63 @@ async def say(ctx, *, content: str):
         await ctx.send(embed=embed)
         return
     await ctx.send(content)
+
+
+@bot.command()
+async def afk(ctx, *, reason: str = "No reason provided"):
+    """Set yourself as AFK. You'll be auto-removed when you send a message."""
+    user_id = str(ctx.author.id)
+    afk_storage[user_id] = {
+        "reason": reason,
+        "since": time.time(),
+        "guild_id": ctx.guild.id if ctx.guild else None,
+    }
+    save_afk()
+
+    embed = discord.Embed(
+        title="💤 AFK Mode Set",
+        description=f"{ctx.author.mention} is now AFK.\nI'll let people know when they mention or reply to you, and your AFK will auto-clear the next time you chat!",
+        color=discord.Color.greyple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"User ID: {ctx.author.id}")
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def unafk(ctx):
+    """Manually remove your AFK status."""
+    user_id = str(ctx.author.id)
+    if user_id not in afk_storage:
+        await ctx.send("✅ You're not AFK right now.")
+        return
+
+    data = afk_storage[user_id]
+    duration = time.time() - data.get("since", time.time())
+
+    del afk_storage[user_id]
+    save_afk()
+
+    embed = discord.Embed(
+        title="👋 Welcome Back!",
+        description=f"{ctx.author.mention} is no longer AFK.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="AFK Duration", value=_format_duration(duration), inline=True)
+    embed.add_field(name="Original Reason", value=data.get("reason", "No reason provided"), inline=True)
+    await ctx.send(embed=embed)
+
+
+@afk.error
+async def afk_error(ctx, error):
+    print(f"Ignored exception in command afk: {error}")
+
+
+@unafk.error
+async def unafk_error(ctx, error):
+    print(f"Ignored exception in command unafk: {error}")
 
 
 @bot.command()
