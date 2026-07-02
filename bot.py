@@ -18,7 +18,36 @@ intents.message_content = True
 intents.members = True
 intents.presences = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# ============== DEFAULT PREFIX ==============
+DEFAULT_PREFIX = "!"
+
+PREFIX_FILE = "prefixes.json"
+
+def load_prefixes():
+    if os.path.exists(PREFIX_FILE):
+        try:
+            with open(PREFIX_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_prefixes():
+    with open(PREFIX_FILE, "w") as f:
+        json.dump(prefix_storage, f, indent=2)
+
+prefix_storage = load_prefixes()  # { "guild_id_str": "prefix" }
+
+
+async def get_prefix(bot, message):
+    if message.guild is not None:
+        guild_prefix = prefix_storage.get(str(message.guild.id))
+        if guild_prefix is not None:
+            return commands.when_mentioned_or(guild_prefix)(bot, message)
+    return commands.when_mentioned_or(DEFAULT_PREFIX)(bot, message)
+
+
+bot = commands.Bot(command_prefix=get_prefix, intents=intents)
 
 TARGET_ROLE_ID = 1521658712626823290
 
@@ -368,6 +397,16 @@ async def modhelp(ctx):
         inline=False,
     )
     embed.add_field(
+        name="Prefix",
+        value="""
+!prefix
+!prefix set <prefix>
+!prefix reset
+!prefix view
+""",
+        inline=False,
+    )
+    embed.add_field(
         name="Bot Access",
         value="""
 !givebotaccess @user
@@ -415,6 +454,7 @@ async def commands(ctx):
         "!role add !role remove !role list "
         "!say !pingeveryone "
         "!afk !unafk "
+        "!prefix !prefix set !prefix reset !prefix view "
         "!ping !rules !rule !commands !modhelp"
     )
 
@@ -1467,6 +1507,124 @@ async def afk_error(ctx, error):
 @unafk.error
 async def unafk_error(ctx, error):
     print(f"Ignored exception in command unafk: {error}")
+
+
+@bot.group(name="prefix", invoke_without_command=True)
+async def prefix_group(ctx):
+    """Manage this server's command prefix. Usage: !prefix set/reset/view"""
+    if ctx.guild is None:
+        await ctx.send("❌ Prefixes can only be changed in a server.")
+        return
+    current = prefix_storage.get(str(ctx.guild.id), DEFAULT_PREFIX)
+    embed = discord.Embed(
+        title="⚙️ Command Prefix",
+        description=(
+            f"Current prefix for **{ctx.guild.name}**: `{current}`\n\n"
+            f"**Subcommands:**\n"
+            f"• `{current}prefix set <prefix>` — change the prefix (words or symbols allowed)\n"
+            f"• `{current}prefix reset` — reset back to `{DEFAULT_PREFIX}`\n"
+            f"• `{current}prefix view` — show the current prefix\n\n"
+            f"💡 The bot will always also respond to **@mentions** no matter what the prefix is."
+        ),
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"Guild ID: {ctx.guild.id}")
+    await ctx.send(embed=embed)
+
+
+@prefix_group.command(name="set")
+async def prefix_set(ctx, *, new_prefix: str = None):
+    """Change this server's prefix. Words and multi-character prefixes are allowed."""
+    if ctx.guild is None:
+        await ctx.send("❌ Prefixes can only be changed in a server.")
+        return
+    if new_prefix is None:
+        await ctx.send("❌ Usage: `!prefix set <new_prefix>`\n"
+                       "Examples: `!prefix set ?`, `!prefix set !!`, `!prefix set hey `, `!prefix set $`")
+        return
+
+    # Strip leading/trailing whitespace; reject if empty after that
+    new_prefix = new_prefix.strip()
+    if not new_prefix:
+        await ctx.send("❌ Prefix cannot be empty.")
+        return
+
+    # Length sanity check (Discord limits bot nicknames / message content, but keep it short)
+    if len(new_prefix) > 32:
+        await ctx.send("❌ Prefix is too long. Please keep it under 32 characters.")
+        return
+
+    # Disallow newlines just in case
+    if "\n" in new_prefix or "\r" in new_prefix:
+        await ctx.send("❌ Prefix cannot contain newlines.")
+        return
+
+    prefix_storage[str(ctx.guild.id)] = new_prefix
+    save_prefixes()
+
+    embed = discord.Embed(
+        title="✅ Prefix Updated",
+        description=(
+            f"Prefix for **{ctx.guild.name}** has been changed to `{new_prefix}`\n\n"
+            f"**Examples:**\n"
+            f"• `{new_prefix}ping`\n"
+            f"• `{new_prefix}modhelp`\n"
+            f"• `{new_prefix}prefix view`"
+        ),
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Changed By", value=ctx.author.mention, inline=True)
+    embed.set_footer(text=f"Guild ID: {ctx.guild.id}")
+    await ctx.send(embed=embed)
+
+
+@prefix_group.command(name="reset")
+async def prefix_reset(ctx):
+    """Reset this server's prefix back to the default."""
+    if ctx.guild is None:
+        await ctx.send("❌ Prefixes can only be reset in a server.")
+        return
+
+    if str(ctx.guild.id) not in prefix_storage:
+        await ctx.send(f"⚠️ This server is already using the default prefix (`{DEFAULT_PREFIX}`).")
+        return
+
+    del prefix_storage[str(ctx.guild.id)]
+    save_prefixes()
+
+    embed = discord.Embed(
+        title="♻️ Prefix Reset",
+        description=f"Prefix for **{ctx.guild.name}** has been reset to `{DEFAULT_PREFIX}`.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Reset By", value=ctx.author.mention, inline=True)
+    await ctx.send(embed=embed)
+
+
+@prefix_group.command(name="view")
+async def prefix_view(ctx):
+    """Show the current prefix for this server."""
+    if ctx.guild is None:
+        await ctx.send("❌ Prefixes can only be viewed in a server.")
+        return
+    current = prefix_storage.get(str(ctx.guild.id), DEFAULT_PREFIX)
+    embed = discord.Embed(
+        title="⚙️ Current Prefix",
+        description=f"Prefix for **{ctx.guild.name}**: `{current}`\n\n💡 The bot also responds to **@mentions**.",
+        color=discord.Color.blue(),
+    )
+    await ctx.send(embed=embed)
+
+
+@prefix_set.error
+async def prefix_set_error(ctx, error):
+    if isinstance(error, MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!prefix set <new_prefix>`")
+    else:
+        print(f"Ignored exception in command prefix set: {error}")
 
 
 @bot.command()
