@@ -7,6 +7,7 @@ from discord.ext.commands import (
     MissingPermissions,
     MissingRequiredArgument,
     BadArgument,
+    when_mentioned_or,
 )
 import os
 import json
@@ -43,8 +44,8 @@ async def get_prefix(bot, message):
     if message.guild is not None:
         guild_prefix = prefix_storage.get(str(message.guild.id))
         if guild_prefix is not None:
-            return commands.when_mentioned_or(guild_prefix)(bot, message)
-    return commands.when_mentioned_or(DEFAULT_PREFIX)(bot, message)
+            return when_mentioned_or(guild_prefix)(bot, message)
+    return when_mentioned_or(DEFAULT_PREFIX)(bot, message)
 
 
 bot = commands.Bot(command_prefix=get_prefix, intents=intents)
@@ -624,7 +625,6 @@ async def importwarns(ctx):
             await ctx.send("❌ Invalid file format! Expected a JSON object.")
             return
 
-        # Merge with existing warns (add to existing, don't overwrite)
         imported_count = 0
         for user_id, reasons in data.items():
             if user_id not in warn_storage:
@@ -1510,7 +1510,7 @@ async def unafk_error(ctx, error):
 
 
 @bot.group(name="prefix", invoke_without_command=True)
-async def prefix_group(ctx):
+async def prefix_cmd(ctx):
     """Manage this server's command prefix. Usage: !prefix set/reset/view"""
     if ctx.guild is None:
         await ctx.send("❌ Prefixes can only be changed in a server.")
@@ -1533,7 +1533,7 @@ async def prefix_group(ctx):
     await ctx.send(embed=embed)
 
 
-@prefix_group.command(name="set")
+@prefix_cmd.command(name="set")
 async def prefix_set(ctx, *, new_prefix: str = None):
     """Change this server's prefix. Words and multi-character prefixes are allowed."""
     if ctx.guild is None:
@@ -1544,18 +1544,13 @@ async def prefix_set(ctx, *, new_prefix: str = None):
                        "Examples: `!prefix set ?`, `!prefix set !!`, `!prefix set hey `, `!prefix set $`")
         return
 
-    # Strip leading/trailing whitespace; reject if empty after that
     new_prefix = new_prefix.strip()
     if not new_prefix:
         await ctx.send("❌ Prefix cannot be empty.")
         return
-
-    # Length sanity check (Discord limits bot nicknames / message content, but keep it short)
     if len(new_prefix) > 32:
         await ctx.send("❌ Prefix is too long. Please keep it under 32 characters.")
         return
-
-    # Disallow newlines just in case
     if "\n" in new_prefix or "\r" in new_prefix:
         await ctx.send("❌ Prefix cannot contain newlines.")
         return
@@ -1580,13 +1575,12 @@ async def prefix_set(ctx, *, new_prefix: str = None):
     await ctx.send(embed=embed)
 
 
-@prefix_group.command(name="reset")
+@prefix_cmd.command(name="reset")
 async def prefix_reset(ctx):
     """Reset this server's prefix back to the default."""
     if ctx.guild is None:
         await ctx.send("❌ Prefixes can only be reset in a server.")
         return
-
     if str(ctx.guild.id) not in prefix_storage:
         await ctx.send(f"⚠️ This server is already using the default prefix (`{DEFAULT_PREFIX}`).")
         return
@@ -1604,7 +1598,7 @@ async def prefix_reset(ctx):
     await ctx.send(embed=embed)
 
 
-@prefix_group.command(name="view")
+@prefix_cmd.command(name="view")
 async def prefix_view(ctx):
     """Show the current prefix for this server."""
     if ctx.guild is None:
